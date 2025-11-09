@@ -1,0 +1,196 @@
+[
+  {
+    "Delete": false,
+    "id": "1565",
+    "nome": "Al Bayah School - C2 & C3 Girls",
+    "city": "Sila",
+    "coaches": [
+      "PS2443",
+      "PS3286"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2005",
+    "nome": "Al Dhafra School - C2 Boys",
+    "city": "Madina Zayed",
+    "coaches": [
+      "PS1013",
+      "PS1628",
+      "PS2855",
+      "PS2442"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2069",
+    "nome": "Al Dhannah School - C2 & C3 Boys",
+    "city": "Al Dhannah",
+    "coaches": [
+      "PS2855"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2071",
+    "nome": "Al Dhannah School - C2 & C3 Girls",
+    "city": "Al Dhannah",
+    "coaches": [
+      "PS2443",
+      "PS3286"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1662",
+    "nome": "Al Ebtekar School - C2 & C3 Boys",
+    "city": "Ghayathi",
+    "coaches": [
+      "PS2442",
+      "PS3398"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1643",
+    "nome": "Al Falah School - C3 Boys",
+    "city": "Madina Zayed",
+    "coaches": [
+      "PS1013"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "438",
+    "nome": "Al Farouq School - C2 & C3 Boys",
+    "city": "Liwa",
+    "coaches": [
+      "PS1628"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2065",
+    "nome": "Al Ghayathi School - C1-C2 & C3 Girls",
+    "city": "Ghayathi",
+    "coaches": [
+      "PS2960",
+      "PS3399"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1562",
+    "nome": "Al Huiteen School - C1 & C2 Girls",
+    "city": "Liwa",
+    "coaches": [
+      "PS2300"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2086",
+    "nome": "Al Marfaa School - C2 & C3 Boys",
+    "city": "Mirfa",
+    "coaches": [
+      "PS2940",
+      "PS3029"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2085",
+    "nome": "Al Marfaa School - C2 & C3 Girls",
+    "city": "Mirfa",
+    "coaches": [
+      "PS1223",
+      "PS2871"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1564",
+    "nome": "Al Shabhana School - C2 & C3 Boys",
+    "city": "Sila",
+    "coaches": [
+      "PS1700",
+      "PS2769"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "285",
+    "nome": "Al Siddique School - C2 & C3 Boys",
+    "city": "Liwa",
+    "coaches": [
+      "PS1628"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1682",
+    "nome": "Baynunah School - C2 Boys",
+    "city": "Ghayathi",
+    "coaches": [
+      "PS2442",
+      "PS3398"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1151M",
+    "nome": "Beda Al Mutaw'a - C1 & C2 Boys",
+    "city": "Ghayathi",
+    "coaches": [
+      "PS2855"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1151F",
+    "nome": "Beda Al Mutaw'a - C1 & C2 Girls",
+    "city": "Ghayathi",
+    "coaches": [
+      "PS2960",
+      "PS3399"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "1563",
+    "nome": "Khanoor School - C1 & C2 Girls",
+    "city": "Liwa",
+    "coaches": [
+      "PS1264"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "123456789",
+    "nome": "PALMS SPORTS",
+    "city": "",
+    "coaches": [
+      "PS0007"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "282",
+    "nome": "Qatr Al Nada School - C3 Girls",
+    "city": "Madina Zayed",
+    "coaches": [
+      "PS1264",
+      "PS2300"
+    ]
+  },
+  {
+    "Delete": false,
+    "id": "2066",
+    "nome": "Zayed City School",
+    "city": "Madina Zayed",
+    "coaches": [
+      "PS3030",
+      "PS3134"
+    ]
+  }
+]
