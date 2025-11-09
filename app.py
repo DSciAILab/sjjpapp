@@ -576,6 +576,32 @@ elif menu_selected == "Manage Requests":
 
     # Optional school filter UI
     school_map = {str(s.get("id")): s.get("nome", "") for s in (load_json(FILES["schools"]) or []) if s.get("id")}
+
+    if is_admin and rows:
+        export_df = pd.DataFrame(rows)
+        if not export_df.empty:
+            export_df = export_df.copy()
+            school_series = export_df["school_id"].astype(str) if "school_id" in export_df.columns else pd.Series([""] * len(export_df), index=export_df.index)
+            ps_series = export_df["ps_number"].astype(str) if "ps_number" in export_df.columns else pd.Series([""] * len(export_df), index=export_df.index)
+            def _clean_optional(value):
+                if value is None:
+                    return ""
+                text = str(value).strip()
+                return "" if not text or text.lower() == "nan" else text
+            school_values = school_series.apply(_clean_optional)
+            export_df["school_name"] = school_values.map(lambda x: school_map.get(x, x) if x else "")
+            ps_values = ps_series.apply(_clean_optional)
+            export_df["requester_name"] = ps_values.map(lambda x: requester_lookup.get(x, "") if x else "")
+            preferred_cols = ["id", "school_id", "school_name", "category", "material", "quantity", "status", "date", "ps_number", "requester_name"]
+            ordered_cols = [c for c in preferred_cols if c in export_df.columns] + [c for c in export_df.columns if c not in preferred_cols]
+            export_df = export_df[ordered_cols]
+            export_bytes = export_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Export All Requests (CSV)",
+                export_bytes,
+                file_name=f"requests_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
     visible_school_ids = sorted({str(r.get("school_id", "")) for r in visible if r.get("school_id")})
     if visible_school_ids:
         options = ["All schools"] + [f"{school_map.get(sid, '(unknown)')} ({sid})" for sid in visible_school_ids]
