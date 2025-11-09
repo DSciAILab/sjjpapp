@@ -50,6 +50,7 @@ FILES = {
 }
 
 os.makedirs(DATA_DIR, exist_ok=True)
+UNSYNCED_REQUEST_SESSION_KEY = "unsynced_request_ids"
 
 
 def ensure_json(path: str, default_content):
@@ -225,6 +226,27 @@ def list_user_schools(user, schools):
 
 def materials_by_category(materials, category):
     return [m for m in materials if m.get("category") == category]
+
+
+def load_requests_data():
+    """Load requests preferring Supabase; fallback to local JSON."""
+    rows = []
+    source = "local"
+    error = None
+    if supabase:
+        try:
+            data = supabase.table("requests").select("*").range(0, 100000).execute()
+            rows = data.data or []
+            source = "supabase"
+            # keep local cache aligned when possible
+            save_json(FILES["requests"], rows)
+        except Exception as exc:
+            error = exc
+    if not rows:
+        rows = load_json(FILES["requests"]) or []
+        source = "local"
+    rows = ensure_request_id_and_defaults(rows)
+    return rows, source, error
 
 
 def persist_requests(records):
@@ -517,15 +539,14 @@ if menu_selected == "Submit Request":
         }
         st.session_state["pending_request"].append(new_item)
         result = persist_requests([new_item])
-        unsynced_key = "unsynced_request_ids"
-        if unsynced_key not in st.session_state:
-            st.session_state[unsynced_key] = set()
+        if UNSYNCED_REQUEST_SESSION_KEY not in st.session_state:
+            st.session_state[UNSYNCED_REQUEST_SESSION_KEY] = set()
         if result["error"]:
-            st.session_state[unsynced_key].add(new_item["id"])
+            st.session_state[UNSYNCED_REQUEST_SESSION_KEY].add(new_item["id"])
             notify("warning", f"Item salvo localmente, mas não sincronizado com Supabase: {result['error']}")
         else:
-            if new_item["id"] in st.session_state[unsynced_key]:
-                st.session_state[unsynced_key].discard(new_item["id"])
+            if new_item["id"] in st.session_state[UNSYNCED_REQUEST_SESSION_KEY]:
+                st.session_state[UNSYNCED_REQUEST_SESSION_KEY].discard(new_item["id"])
             notify("success", "Item salvo e sincronizado com sucesso.")
 
     if st.session_state["pending_request"]:
@@ -554,37 +575,22 @@ if menu_selected == "Submit Request":
                 show_summary("Submit Request", saved=0, synced=0, errors=len(errors))
                 st.stop()
 
-            # 1) Persist locally
-            all_requests = load_json(FILES["requests"])
-            just_count = len(st.session_state["pending_request"]) if st.session_state["pending_request"] else 0
-            for item in st.session_state["pending_request"]:
-                if "id" not in item:
-                    item["id"] = str(uuid.uuid4())
-                all_requests.append(item)
-            save_json(FILES["requests"], all_requests)
-
-            # 2) Sync just-submitted items to Supabase (best-effort)
-            if supabase and st.session_state["pending_request"]:
-                try:
-                    allowed = {"id", "school_id", "category", "material", "quantity", "date", "ps_number", "status"}
-                    to_send = []
-                    for r in st.session_state["pending_request"]:
-                        shaped = {k: v for k, v in r.items() if k in allowed}
-                        if "quantity" in shaped:
-                            try:
-                                shaped["quantity"] = int(shaped["quantity"])
-                            except Exception:
-                                pass
-                        to_send.append(shaped)
-                    if to_send:
-                        supabase.table("requests").upsert(to_send, on_conflict="id").execute()
-                        notify("success", f"Synced {len(to_send)} item(s) to Supabase.")
-                        show_summary("Submit Request", saved=just_count, synced=len(to_send))
-                except Exception as e:
-                    notify("warning", f"Could not sync to Supabase now: {e}")
-                    show_summary("Submit Request", saved=just_count, synced=0, errors=1)
-
-            notify("success", "Request submitted successfully.")
+            result = persist_requests(st.session_state["pending_request"])
+            if UNSYNCED_REQUEST_SESSION_KEY not in st.session_state:
+                st.session_state[UNSYNCED_REQUEST_SESSION_KEY] = set()
+            batch_ids = {str(item.get("id")) for item in st.session_state["pending_request"] if item.get("id")}
+            if result["error"]:
+                st.session_state[UNSYNCED_REQUEST_SESSION_KEY].update(batch_ids)
+                notify("warning", f"As requisições foram salvas localmente, mas não sincronizaram com Supabase: {result['error']}")
+            else:
+                st.session_state[UNSYNCED_REQUEST_SESSION_KEY].difference_update(batch_ids)
+                notify("success", "Requisições salvas e sincronizadas com sucesso.")
+            show_summary(
+                "Submit Request",
+                saved=result["saved"],
+                synced=result["synced"],
+                errors=1 if result["error"] else 0
+            )
             st.session_state["pending_request"] = []
             st.rerun()
 
@@ -595,8 +601,11 @@ elif menu_selected == "Manage Requests":
     st.header("Manage Requests")
     st.info("Only 'Pending' requests can be edited or deleted.")
 
-    rows = load_json(FILES["requests"])
-    rows = ensure_request_id_and_defaults(rows)
+    rows, data_source, load_error = load_requests_data()
+    if load_error:
+        notify("warning", f"Dados locais carregados. Erro ao consultar Supabase: {load_error}")
+    elif data_source == "local" and supabase:
+        st.caption("Dados carregados do arquivo local. Clique em Data Sync → Pull se quiser alinhar com o Supabase.")
     is_admin = user.get("credential") == "Admin"
 
     requester_lookup = {}
@@ -774,7 +783,7 @@ elif menu_selected == "Manage Requests":
                 st.warning(f"Confirm deletion of {len(confirm_ids)} request(s)? This cannot be undone.")
                 # Preview first 10 selected requests
                 try:
-                    current_rows = load_json(FILES["requests"]) or []
+                    current_rows, _, _ = load_requests_data()
                     idset = set(confirm_ids)
                     selected = [r for r in current_rows if r.get("id") in idset]
                 except Exception:
@@ -796,7 +805,7 @@ elif menu_selected == "Manage Requests":
                 with c1:
                     if st.button("Confirm Delete", key="confirm_delete_requests_btn"):
                         # Reload latest rows and apply deletion
-                        current_rows = load_json(FILES["requests"]) or []
+                        current_rows, _, _ = load_requests_data()
                         kept = [r for r in current_rows if r.get("id") not in set(confirm_ids)]
                         save_json(FILES["requests"], kept)
                         if supabase and confirm_ids:
