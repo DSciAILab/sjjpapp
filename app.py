@@ -227,6 +227,59 @@ def materials_by_category(materials, category):
     return [m for m in materials if m.get("category") == category]
 
 
+def persist_requests(records):
+    """Persist request records locally and sync with Supabase when available."""
+    if not records:
+        return {"saved": 0, "synced": 0, "error": None}
+
+    existing = load_json(FILES["requests"]) or []
+    by_id = {}
+    for row in existing:
+        rid = str(row.get("id", "")).strip()
+        if rid:
+            by_id[rid] = row
+
+    payload = []
+    saved = 0
+    for rec in records:
+        item = dict(rec) if isinstance(rec, dict) else {}
+        rid = str(item.get("id") or "").strip() or str(uuid.uuid4())
+        item["id"] = rid
+        item.setdefault("status", "Pending")
+        item.setdefault("ps_number", "unknown")
+        # Normalize quantity to int when possible
+        if "quantity" in item:
+            try:
+                item["quantity"] = int(item["quantity"])
+            except Exception:
+                pass
+        by_id[rid] = item
+        payload.append({
+            "id": item.get("id"),
+            "school_id": item.get("school_id"),
+            "category": item.get("category"),
+            "material": item.get("material"),
+            "quantity": item.get("quantity"),
+            "date": item.get("date"),
+            "ps_number": item.get("ps_number"),
+            "status": item.get("status"),
+        })
+        saved += 1
+
+    save_json(FILES["requests"], list(by_id.values()))
+
+    synced = 0
+    error = None
+    if supabase and payload:
+        try:
+            supabase.table("requests").upsert(payload, on_conflict="id").execute()
+            synced = len(payload)
+        except Exception as exc:
+            error = exc
+
+    return {"saved": saved, "synced": synced, "error": error}
+
+
 # ------------------------------------------------------------
 # 5) SUPABASE SYNC
 # ------------------------------------------------------------
@@ -452,7 +505,7 @@ if menu_selected == "Submit Request":
         st.session_state["pending_request"] = []
 
     if st.button("Add Another Item", disabled=not (selected_school_id and material_choice)):
-        st.session_state["pending_request"].append({
+        new_item = {
             "id": str(uuid.uuid4()),
             "school_id": selected_school_id,
             "category": category,
@@ -461,8 +514,19 @@ if menu_selected == "Submit Request":
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ps_number": str(user["ps_number"]),
             "status": "Pending"
-        })
-        st.success("Item added to the current request batch.")
+        }
+        st.session_state["pending_request"].append(new_item)
+        result = persist_requests([new_item])
+        unsynced_key = "unsynced_request_ids"
+        if unsynced_key not in st.session_state:
+            st.session_state[unsynced_key] = set()
+        if result["error"]:
+            st.session_state[unsynced_key].add(new_item["id"])
+            notify("warning", f"Item salvo localmente, mas não sincronizado com Supabase: {result['error']}")
+        else:
+            if new_item["id"] in st.session_state[unsynced_key]:
+                st.session_state[unsynced_key].discard(new_item["id"])
+            notify("success", "Item salvo e sincronizado com sucesso.")
 
     if st.session_state["pending_request"]:
         st.subheader("Current Batch")
