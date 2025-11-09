@@ -533,11 +533,37 @@ elif menu_selected == "Manage Requests":
 
     rows = load_json(FILES["requests"])
     rows = ensure_request_id_and_defaults(rows)
+    is_admin = user.get("credential") == "Admin"
+
+    requester_lookup = {}
+    if is_admin:
+        try:
+            users_rows = load_json(FILES["users"]) or []
+            requester_lookup = {
+                str(u.get("ps_number", "")).strip(): (u.get("name") or str(u.get("ps_number", "")).strip())
+                for u in users_rows
+                if str(u.get("ps_number", "")).strip()
+            }
+        except Exception:
+            requester_lookup = {}
+    def add_requester_columns(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        if "ps_number" not in df.columns:
+            df["PS Number"] = ""
+            df["Requester"] = ""
+            return df
+        ps_series = df["ps_number"].apply(lambda x: str(x).strip() if pd.notnull(x) else "")
+        df["PS Number"] = ps_series
+        df["Requester"] = ps_series.map(lambda x: requester_lookup.get(x, "") if x else "")
+        df["Requester"] = df["Requester"].fillna("")
+        df.loc[df["Requester"].astype(str).str.strip() == "", "Requester"] = ps_series
+        df = df.drop(columns=["ps_number"], errors="ignore")
+        return df
 
     # Visibility:
     # - Admin sees all requests
     # - Coaches see all requests for their schools (even if created by another coach)
-    if user["credential"] == "Admin":
+    if is_admin:
         visible = rows
     else:
         all_schools = load_json(FILES["schools"]) or []
@@ -564,7 +590,11 @@ elif menu_selected == "Manage Requests":
         # Pending (editable)
         st.subheader("Pending Requests (Editable)")
         if pending:
-            dfp = pd.DataFrame(pending).drop(columns=["ps_number", "id"], errors="ignore")
+            dfp = pd.DataFrame(pending).drop(columns=["id"], errors="ignore")
+            if is_admin:
+                dfp = add_requester_columns(dfp)
+            else:
+                dfp = dfp.drop(columns=["ps_number"], errors="ignore")
             # Replace school_id with human-friendly School name
             try:
                 dfp["School"] = dfp.get("school_id", "").astype(str).map(lambda x: school_map.get(x, x))
@@ -572,10 +602,11 @@ elif menu_selected == "Manage Requests":
                 dfp["School"] = dfp.get("school_id", "")
             if "school_id" in dfp.columns:
                 dfp = dfp.drop(columns=["school_id"], errors="ignore")
-            is_admin = (user.get("credential") == "Admin")
             # Allow everyone to mark Delete on their pending rows
             dfp["Delete"] = False
             preferred = ["School", "category", "material", "quantity", "status", "date"]
+            if is_admin:
+                preferred = ["School", "Requester", "PS Number", "category", "material", "quantity", "status", "date"]
             first_cols = ["Delete"]
             ordered = [c for c in first_cols + preferred if c in dfp.columns] + [c for c in dfp.columns if c not in set(first_cols + preferred)]
             dfp = dfp[ordered]
@@ -595,6 +626,9 @@ elif menu_selected == "Manage Requests":
                 "date": st.column_config.TextColumn("Date"),
                 "Delete": st.column_config.CheckboxColumn("Delete"),
             }
+            if is_admin:
+                col_config["Requester"] = st.column_config.TextColumn("Requested By")
+                col_config["PS Number"] = st.column_config.TextColumn("PS Number")
             if not is_admin:
                 st.caption("Note: School and Date are read-only; Only Admin can change Status. Edits on these are ignored on save.")
             else:
@@ -608,7 +642,11 @@ elif menu_selected == "Manage Requests":
         # Finalized (read-only)
         if finalized:
             st.subheader("Non-Pending Requests (Read-only)")
-            dff = pd.DataFrame(finalized).drop(columns=["ps_number", "id"], errors="ignore")
+            dff = pd.DataFrame(finalized).drop(columns=["id"], errors="ignore")
+            if is_admin:
+                dff = add_requester_columns(dff)
+            else:
+                dff = dff.drop(columns=["ps_number"], errors="ignore")
             # Map school_id to School name for display
             try:
                 dff["School"] = dff.get("school_id", "").astype(str).map(lambda x: school_map.get(x, x))
@@ -622,6 +660,11 @@ elif menu_selected == "Manage Requests":
                 "status": "Status",
                 "date": "Date",
             })
+            preferred_final = ["School", "Category", "Item", "Qty", "Status", "Date"]
+            if is_admin:
+                preferred_final = ["School", "Requester", "PS Number", "Category", "Item", "Qty", "Status", "Date"]
+            ordered_final = [c for c in preferred_final if c in dff.columns] + [c for c in dff.columns if c not in set(preferred_final)]
+            dff = dff[ordered_final]
             st.dataframe(dff, use_container_width=True)
 
         # Stage deletion with confirmation
