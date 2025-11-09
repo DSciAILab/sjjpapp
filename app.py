@@ -644,9 +644,6 @@ elif menu_selected == "Manage Requests":
         my_school_ids = {str(s.get("id")) for s in my_schools if s.get("id")}
         visible = [r for r in rows if str(r.get("school_id", "")) in my_school_ids]
 
-    pending = [r for r in visible if str(r.get("status", "")).lower() == "pending"]
-    finalized = [r for r in visible if str(r.get("status", "")).lower() != "pending"]
-
     # Optional school filter UI
     school_map = {str(s.get("id")): s.get("nome", "") for s in (load_json(FILES["schools"]) or []) if s.get("id")}
 
@@ -686,6 +683,9 @@ elif menu_selected == "Manage Requests":
     if not visible:
         st.info("No requests found.")
     else:
+        pending = [r for r in visible if str(r.get("status", "")).lower() == "pending"]
+        finalized = [r for r in visible if str(r.get("status", "")).lower() != "pending"]
+
         # Pending (editable)
         st.subheader("Pending Requests (Editable)")
         if pending:
@@ -718,7 +718,7 @@ elif menu_selected == "Manage Requests":
                 "quantity": st.column_config.NumberColumn("Qty", min_value=1, step=1),
                 # Admin pode alterar status; Coaches apenas visualizam
                 "status": (
-                    st.column_config.SelectboxColumn("Status", options=["Pending", "Approved", "Rejected"], default="Pending")
+                    st.column_config.SelectboxColumn("Status", options=["Pending","Processed" "Approved", "Rejected"], default="Pending")
                     if is_admin else st.column_config.TextColumn("Status")
                 ),
                 # Data exibida mas tratada como somente-leitura ao salvar (mudanças são ignoradas)
