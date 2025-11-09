@@ -718,7 +718,7 @@ elif menu_selected == "Manage Requests":
                 "quantity": st.column_config.NumberColumn("Qty", min_value=1, step=1),
                 # Admin pode alterar status; Coaches apenas visualizam
                 "status": (
-                    st.column_config.SelectboxColumn("Status", options=["Pending","Processed" "Approved", "Rejected"], default="Pending")
+                    st.column_config.SelectboxColumn("Status", options=["Pending","Processed", "Approved", "Rejected"], default="Pending")
                     if is_admin else st.column_config.TextColumn("Status")
                 ),
                 # Data exibida mas tratada como somente-leitura ao salvar (mudanças são ignoradas)
