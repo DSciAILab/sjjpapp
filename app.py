@@ -1448,7 +1448,7 @@ elif menu_selected == "Kimono Stock":
 
     # Friendly column labels (hide internal id)
     col_cfg = {
-        "id": st.column_config.TextColumn("ID", hidden=True),
+        "id": st.column_config.TextColumn("ID"),
         "school_id": st.column_config.TextColumn("School ID"),
         "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
         "type": st.column_config.TextColumn("Type"),
