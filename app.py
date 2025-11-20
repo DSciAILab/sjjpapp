@@ -1330,70 +1330,106 @@ elif menu_selected == "Kimono Stock":
 
     if st.session_state.get("pending_stock"):
         st.subheader("Current Stock Batch")
-        batch_df = pd.DataFrame(st.session_state["pending_stock"]).drop(columns=["id"], errors="ignore")
-        st.dataframe(batch_df, use_container_width=True)
+        # Allow editing the pending batch before submit (ID shown read-only)
+        batch_df = pd.DataFrame(st.session_state["pending_stock"]) if st.session_state["pending_stock"] else pd.DataFrame()
+        # Ensure expected columns exist for the editor
+        for c in ["id", "school_id", "project", "type", "size", "quantity"]:
+            if c not in batch_df.columns:
+                batch_df[c] = ""
+        batch_df["Delete"] = False
+        batch_col_cfg = {
+            "id": st.column_config.TextColumn("ID"),
+            "school_id": st.column_config.TextColumn("School ID"),
+            "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
+            "type": st.column_config.TextColumn("Type"),
+            "size": st.column_config.TextColumn("Size"),
+            "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
+            "Delete": st.column_config.CheckboxColumn("Delete"),
+        }
+        edited_batch = st.data_editor(batch_df, use_container_width=True, hide_index=True, column_config=batch_col_cfg)
 
-        if st.button("Submit Stock Batch", type="primary"):
-            # Validate
-            errors = []
-            valid_school_ids = {str(s.get("id")) for s in schools}
-            for it in st.session_state["pending_stock"]:
-                sid = str(it.get("school_id", "")).strip()
-                if sid not in valid_school_ids:
-                    errors.append(f"Invalid school_id: {sid}")
-                try:
-                    if int(it.get("quantity", 0)) < 0:
-                        errors.append(f"Invalid quantity for school {sid}: {it.get('quantity')}")
-                except Exception:
-                    errors.append(f"Non-numeric quantity for school {sid}: {it.get('quantity')}")
+        col_a, col_b = st.columns([1,1])
+        with col_a:
+            if st.button("Update Batch"):
+                # Apply edits back to session_state pending_stock
+                recs = edited_batch.fillna("").to_dict(orient="records")
+                new_pending = []
+                for r in recs:
+                    if r.get("Delete"):
+                        continue
+                    try:
+                        r["quantity"] = int(r.get("quantity") or 0)
+                    except Exception:
+                        r["quantity"] = 0
+                    # Ensure id remains or create one
+                    if not r.get("id"):
+                        r["id"] = str(uuid.uuid4())
+                    new_pending.append({k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]})
+                st.session_state["pending_stock"] = new_pending
+                notify("success", "Pending batch updated.")
 
-            if errors:
-                notify("error", "Cannot submit: invalid items detected.")
-                notify("warning", "; ".join(errors))
-                st.stop()
+        with col_b:
+            if st.button("Submit Stock Batch", type="primary"):
+                # Validate
+                errors = []
+                valid_school_ids = {str(s.get("id")) for s in schools}
+                for it in st.session_state["pending_stock"]:
+                    sid = str(it.get("school_id", "")).strip()
+                    if sid not in valid_school_ids:
+                        errors.append(f"Invalid school_id: {sid}")
+                    try:
+                        if int(it.get("quantity", 0)) < 0:
+                            errors.append(f"Invalid quantity for school {sid}: {it.get('quantity')}")
+                    except Exception:
+                        errors.append(f"Non-numeric quantity for school {sid}: {it.get('quantity')}")
 
-            # Persist locally
-            existing = load_json(FILES["stock"]) or []
-            for it in st.session_state["pending_stock"]:
-                # if same school/project/type/size exists, increment quantity instead of duplicate
-                merged = False
-                for ex in existing:
-                    if (str(ex.get("school_id")) == str(it.get("school_id")) and
-                        str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
-                        str(ex.get("type", "")) == str(it.get("type", "")) and
-                        str(ex.get("size", "")) == str(it.get("size", ""))):
-                        try:
-                            ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
-                        except Exception:
-                            ex["quantity"] = int(it.get("quantity", 0))
-                        merged = True
-                        break
-                if not merged:
-                    existing.append(it)
+                if errors:
+                    notify("error", "Cannot submit: invalid items detected.")
+                    notify("warning", "; ".join(errors))
+                    st.stop()
 
-            save_json(FILES["stock"], existing)
+                # Persist locally
+                existing = load_json(FILES["stock"]) or []
+                for it in st.session_state["pending_stock"]:
+                    # if same school/project/type/size exists, increment quantity instead of duplicate
+                    merged = False
+                    for ex in existing:
+                        if (str(ex.get("school_id")) == str(it.get("school_id")) and
+                            str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
+                            str(ex.get("type", "")) == str(it.get("type", "")) and
+                            str(ex.get("size", "")) == str(it.get("size", ""))):
+                            try:
+                                ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
+                            except Exception:
+                                ex["quantity"] = int(it.get("quantity", 0))
+                            merged = True
+                            break
+                    if not merged:
+                        existing.append(it)
 
-            # Sync to Supabase (best-effort)
-            synced = 0
-            if supabase:
-                try:
-                    payload = []
-                    for r in st.session_state["pending_stock"]:
-                        shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
-                        try:
-                            shaped["quantity"] = int(shaped.get("quantity", 0))
-                        except Exception:
-                            pass
-                        payload.append(shaped)
-                    if payload:
-                        supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
-                        synced = len(payload)
-                except Exception as e:
-                    notify("warning", f"Could not sync stock to Supabase: {e}")
+                save_json(FILES["stock"], existing)
 
-            notify("success", f"Stock batch saved ({len(st.session_state['pending_stock'])}) and synced: {synced}.")
-            st.session_state["pending_stock"] = []
-            st.rerun()
+                # Sync to Supabase (best-effort)
+                synced = 0
+                if supabase:
+                    try:
+                        payload = []
+                        for r in st.session_state["pending_stock"]:
+                            shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
+                            try:
+                                shaped["quantity"] = int(shaped.get("quantity", 0))
+                            except Exception:
+                                pass
+                            payload.append(shaped)
+                        if payload:
+                            supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
+                            synced = len(payload)
+                    except Exception as e:
+                        notify("warning", f"Could not sync stock to Supabase: {e}")
+
+                notify("success", f"Stock batch saved ({len(st.session_state['pending_stock'])}) and synced: {synced}.")
+                st.session_state["pending_stock"] = []
+                st.rerun()
 
 
     visible_schools = list_user_schools(user, schools)
@@ -1430,98 +1466,15 @@ elif menu_selected == "Kimono Stock":
             st.markdown(f"**Project: {proj}**")
             rows = []
             for typ, sizes in sorted(types.items()):
-                for size, qty in sorted(sizes.items()):
-                    rows.append({"Type": typ, "Size": size, "Quantity": qty})
-            try:
-                st.table(pd.DataFrame(rows))
-            except Exception:
-                st.write(rows)
-
-    st.divider()
-    st.subheader("Edit stock rows")
-    # Show editable grid for filtered rows (Admin can edit any; coaches only their schools)
-    df = pd.DataFrame(filtered_rows) if filtered_rows else pd.DataFrame(columns=["id", "school_id", "project", "type", "size", "quantity"])
-    # Ensure id column exists (hidden from users) and provide delete checkbox
-    if "id" not in df.columns:
-        df["id"] = ""
-    df["Delete"] = False
-
-    # Friendly column labels (hide internal id)
-    col_cfg = {
-        "id": st.column_config.TextColumn("ID"),
-        "school_id": st.column_config.TextColumn("School ID"),
-        "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
-        "type": st.column_config.TextColumn("Type"),
-        "size": st.column_config.TextColumn("Size"),
-        "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
-        "Delete": st.column_config.CheckboxColumn("Delete"),
-    }
-    edited = st.data_editor(df, use_container_width=True, hide_index=True, column_config=col_cfg)
-
-    if st.button("Save Stock Changes", type="primary"):
-        # Normalize and validate
-        recs = edited.fillna("").to_dict(orient="records")
-        invalid = []
-        for i, r in enumerate(recs):
-            if not str(r.get("school_id", "")).strip():
-                invalid.append(f"row {i+1}: missing school_id")
-            try:
-                r["quantity"] = int(r.get("quantity") or 0)
-            except Exception:
-                invalid.append(f"row {i+1}: invalid quantity")
-            r["project"] = str(r.get("project") or "").upper()
-        if invalid:
-            notify("error", "; ".join(invalid))
-            st.stop()
-
-        # Merge back into full list: support delete flag, update by id or by matching keys
-        existing = load_json(FILES["stock"]) or []
-        # Normalize existing quantities and keys
-        for ex in existing:
-            try:
-                ex["quantity"] = int(ex.get("quantity", 0))
-            except Exception:
-                ex["quantity"] = 0
-            ex["project"] = str(ex.get("project", "")).upper()
-
-        # Helper to find existing row by composite key
-        def find_match(rows, r):
-            for row in rows:
-                if (str(row.get("school_id")) == str(r.get("school_id")) and
-                        str(row.get("project", "")).upper() == str(r.get("project", "")).upper() and
-                        str(row.get("type", "")) == str(r.get("type", "")) and
-                        str(row.get("size", "")) == str(r.get("size", ""))):
-                    return row
-            return None
-
-        # Build by_id map
-        by_id = {r.get("id"): r for r in existing if r.get("id")}
-
-        # Apply edits
-        for r in recs:
-            # Deletion request
-            if r.get("Delete"):
-                rid = r.get("id")
-                if rid and rid in by_id:
-                    by_id.pop(rid, None)
+                st.divider()
+                st.subheader("Stock rows (read-only)")
+                # Show persisted stock rows as read-only; editing should be done via the Current Stock Batch
+                if filtered_rows:
+                    df_read = pd.DataFrame(filtered_rows)
+                    # Present a friendly read-only view
+                    st.dataframe(df_read, use_container_width=True)
                 else:
-                    # try to find by composite key and remove
-                    match = find_match(list(by_id.values()), r)
-                    if match and match.get("id") in by_id:
-                        by_id.pop(match.get("id"), None)
-                continue
-
-            rid = r.get("id")
-            if rid and rid in by_id:
-                # update existing by id
-                # keep id unchanged
-                to_update = {k: v for k, v in r.items() if k != "Delete"}
-                by_id[rid].update(to_update)
-            else:
-                # try find by composite key
-                match = find_match(list(by_id.values()), r)
-                if match:
-                    # update matched row
+                    st.info("No stock rows available for the selected schools.")
                     match.update({k: v for k, v in r.items() if k != "Delete"})
                 else:
                     # new row -> ensure id
