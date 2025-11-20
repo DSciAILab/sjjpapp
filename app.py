@@ -1466,29 +1466,123 @@ elif menu_selected == "Kimono Stock":
             st.markdown(f"**Project: {proj}**")
             rows = []
             for typ, sizes in sorted(types.items()):
-                st.divider()
-                st.subheader("Stock rows (read-only)")
-                # Show persisted stock rows as read-only; editing should be done via the Current Stock Batch
-                if filtered_rows:
-                    df_read = pd.DataFrame(filtered_rows)
-                    # Present a friendly read-only view
-                    st.dataframe(df_read, use_container_width=True)
-                else:
-                    st.info("No stock rows available for the selected schools.")
-                    match.update({k: v for k, v in r.items() if k != "Delete"})
-                else:
-                    # new row -> ensure id
-                    if not rid:
-                        r["id"] = str(uuid.uuid4())
-                    # drop Delete flag
-                    if "Delete" in r:
-                        r.pop("Delete")
-                    by_id[r["id"]] = r
+                for size, qty in sorted(sizes.items()):
+                    rows.append({"Type": typ, "Size": size, "Quantity": qty})
+            try:
+                st.table(pd.DataFrame(rows))
+            except Exception:
+                st.write(rows)
 
-        out = list(by_id.values())
-        save_json(FILES["stock"], out)
-        notify("success", f"Saved {len(recs)} stock rows.")
-        st.rerun()
+    st.divider()
+    st.subheader("Stock rows (read-only)")
+    # Show persisted stock rows as read-only; editing should be done via the Current Stock Batch
+    if filtered_rows:
+        df_read = pd.DataFrame(filtered_rows)
+        # Present a friendly read-only view
+        st.dataframe(df_read, use_container_width=True)
+    else:
+        st.info("No stock rows available for the selected schools.")
+
+    # Admin-only persisted edit flow (separate from batch)
+    if user.get("credential") == "Admin":
+        st.markdown("---")
+        st.subheader("Admin: Edit Persisted Stock")
+        st.caption("Admin-only editor — use with care. Changes affect persisted stock immediately.")
+        if "editing_persisted_stock" not in st.session_state:
+            st.session_state["editing_persisted_stock"] = False
+
+        if st.button("Toggle Persisted Stock Editor"):
+            st.session_state["editing_persisted_stock"] = not st.session_state["editing_persisted_stock"]
+            st.rerun()
+
+        if st.session_state.get("editing_persisted_stock"):
+            # Load full persisted stock for admin editing
+            existing = load_json(FILES["stock"]) or []
+            # Ensure columns
+            df_admin = pd.DataFrame(existing) if existing else pd.DataFrame(columns=["id", "school_id", "project", "type", "size", "quantity"])
+            if "id" not in df_admin.columns:
+                df_admin["id"] = ""
+            df_admin["Delete"] = False
+
+            admin_col_cfg = {
+                "id": st.column_config.TextColumn("ID"),
+                "school_id": st.column_config.TextColumn("School ID"),
+                "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
+                "type": st.column_config.TextColumn("Type"),
+                "size": st.column_config.TextColumn("Size"),
+                "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
+                "Delete": st.column_config.CheckboxColumn("Delete"),
+            }
+
+            edited_admin = st.data_editor(df_admin, use_container_width=True, hide_index=True, column_config=admin_col_cfg)
+
+            if st.button("Save Persisted Stock Changes"):
+                recs = edited_admin.fillna("").to_dict(orient="records")
+                invalid = []
+                for i, r in enumerate(recs):
+                    if not str(r.get("school_id", "")).strip():
+                        invalid.append(f"row {i+1}: missing school_id")
+                    try:
+                        r["quantity"] = int(r.get("quantity") or 0)
+                    except Exception:
+                        invalid.append(f"row {i+1}: invalid quantity")
+                    r["project"] = str(r.get("project") or "").upper()
+                if invalid:
+                    notify("error", "; ".join(invalid))
+                    st.stop()
+
+                # Merge edits into existing persisted rows by id or composite key
+                existing = load_json(FILES["stock"]) or []
+                for ex in existing:
+                    try:
+                        ex["quantity"] = int(ex.get("quantity", 0))
+                    except Exception:
+                        ex["quantity"] = 0
+                    ex["project"] = str(ex.get("project", "")).upper()
+
+                def find_match(rows, r):
+                    for row in rows:
+                        if (str(row.get("school_id")) == str(r.get("school_id")) and
+                                str(row.get("project", "")).upper() == str(r.get("project", "")).upper() and
+                                str(row.get("type", "")) == str(r.get("type", "")) and
+                                str(row.get("size", "")) == str(r.get("size", ""))):
+                            return row
+                    return None
+
+                by_id = {r.get("id"): r for r in existing if r.get("id")}
+
+                for r in recs:
+                    if r.get("Delete"):
+                        rid = r.get("id")
+                        if rid and rid in by_id:
+                            by_id.pop(rid, None)
+                        else:
+                            match = find_match(list(by_id.values()), r)
+                            if match and match.get("id") in by_id:
+                                by_id.pop(match.get("id"), None)
+                        continue
+
+                    rid = r.get("id")
+                    if rid and rid in by_id:
+                        to_update = {k: v for k, v in r.items() if k != "Delete"}
+                        by_id[rid].update(to_update)
+                    else:
+                        match = find_match(list(by_id.values()), r)
+                        if match:
+                            match.update({k: v for k, v in r.items() if k != "Delete"})
+                        else:
+                            if not rid:
+                                r["id"] = str(uuid.uuid4())
+                            if "Delete" in r:
+                                r.pop("Delete")
+                            by_id[r["id"]] = r
+
+                out = list(by_id.values())
+                save_json(FILES["stock"], out)
+                notify("success", f"Saved {len(recs)} persisted stock rows.")
+                # refresh view
+                st.session_state["editing_persisted_stock"] = False
+                st.rerun()
 
 # ----------------------------
 # Data Sync (Admin Only)
