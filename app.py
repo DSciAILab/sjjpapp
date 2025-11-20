@@ -1522,10 +1522,20 @@ elif menu_selected == "Kimono Stock":
             df_admin = pd.DataFrame(existing) if existing else pd.DataFrame(columns=["id", "school_id", "project", "type", "size", "quantity"])
             if "id" not in df_admin.columns:
                 df_admin["id"] = ""
-            df_admin["Delete"] = False
+
+            # Maintain id mapping separately and show admin editor without id column
+            admin_ids = [str(r.get("id") or "") for r in existing]
+            for i in range(len(admin_ids)):
+                if not admin_ids[i]:
+                    admin_ids[i] = str(uuid.uuid4())
+                    if i < len(existing):
+                        existing[i]["id"] = admin_ids[i]
+            st.session_state["persisted_stock_ids"] = admin_ids
+
+            display_admin = df_admin.drop(columns=["id"]) if "id" in df_admin.columns else df_admin.copy()
+            display_admin["Delete"] = False
 
             admin_col_cfg = {
-                "id": st.column_config.TextColumn("ID"),
                 "school_id": st.column_config.TextColumn("School ID"),
                 "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
                 "type": st.column_config.TextColumn("Type"),
@@ -1534,7 +1544,7 @@ elif menu_selected == "Kimono Stock":
                 "Delete": st.column_config.CheckboxColumn("Delete"),
             }
 
-            edited_admin = st.data_editor(df_admin, use_container_width=True, hide_index=True, column_config=admin_col_cfg)
+            edited_admin = st.data_editor(display_admin, use_container_width=True, hide_index=True, column_config=admin_col_cfg)
 
             if st.button("Save Persisted Stock Changes"):
                 recs = edited_admin.fillna("").to_dict(orient="records")
@@ -1569,35 +1579,28 @@ elif menu_selected == "Kimono Stock":
                             return row
                     return None
 
-                by_id = {r.get("id"): r for r in existing if r.get("id")}
-
-                for r in recs:
+                # Reattach ids from the persisted_stock_ids mapping by index
+                ids_map = st.session_state.get("persisted_stock_ids", [])
+                out_by_id = {}
+                for idx, r in enumerate(recs):
                     if r.get("Delete"):
-                        rid = r.get("id")
-                        if rid and rid in by_id:
-                            by_id.pop(rid, None)
-                        else:
-                            match = find_match(list(by_id.values()), r)
-                            if match and match.get("id") in by_id:
-                                by_id.pop(match.get("id"), None)
+                        # skip deleted rows
                         continue
-
-                    rid = r.get("id")
-                    if rid and rid in by_id:
-                        to_update = {k: v for k, v in r.items() if k != "Delete"}
-                        by_id[rid].update(to_update)
+                    if idx < len(ids_map) and ids_map[idx]:
+                        rid = ids_map[idx]
                     else:
-                        match = find_match(list(by_id.values()), r)
-                        if match:
-                            match.update({k: v for k, v in r.items() if k != "Delete"})
-                        else:
-                            if not rid:
-                                r["id"] = str(uuid.uuid4())
-                            if "Delete" in r:
-                                r.pop("Delete")
-                            by_id[r["id"]] = r
+                        rid = str(uuid.uuid4())
+                    shaped = {
+                        "id": rid,
+                        "school_id": r.get("school_id"),
+                        "project": str(r.get("project") or "").upper(),
+                        "type": r.get("type"),
+                        "size": r.get("size"),
+                        "quantity": int(r.get("quantity") or 0),
+                    }
+                    out_by_id[rid] = shaped
 
-                out = list(by_id.values())
+                out = list(out_by_id.values())
                 save_json(FILES["stock"], out)
                 notify("success", f"Saved {len(recs)} persisted stock rows.")
                 # refresh view
