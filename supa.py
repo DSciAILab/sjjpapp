@@ -11,7 +11,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Caminho dos JSONs locais
 data_path = "./data"
-files = ["users.json", "schools.json", "materials.json", "requests.json"]
+files = ["users.json", "schools.json", "materials.json", "requests.json", "stock_kimonos.json"]
 
 # Campos permitidos por tabela (evita erro por colunas inexistentes)
 allowed_fields = {
@@ -19,6 +19,7 @@ allowed_fields = {
     "schools": ["id", "nome", "city", "coaches"],
     "materials": ["category", "subcategory", "item"],
     "requests": ["id", "school_id", "category", "material", "quantity", "date", "ps_number", "status"],
+    "stock_kimonos": ["id", "school_id", "project", "type", "size", "quantity"],
 }
 
 def shape_rows(table: str, rows):

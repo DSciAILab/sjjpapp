@@ -45,6 +45,15 @@ create table if not exists requests (
   ps_number text,
   status text default 'Pending'
 );
+
+create table if not exists stock_kimonos (
+  id uuid primary key default gen_random_uuid(),
+  school_id text,
+  project text,
+  type text,
+  size text,
+  quantity int default 0
+);
 """
 
 # Executa o SQL diretamente

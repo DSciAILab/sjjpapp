@@ -347,6 +347,7 @@ def sync_local_to_supabase(force: bool = False, replace: bool = False):
         "schools": "schools.json",
         "materials": "materials.json",
         "requests": "requests.json",
+        "stock_kimonos": "stock_kimonos.json",
     }
 
     st.subheader("Data Synchronization Log")
@@ -356,11 +357,13 @@ def sync_local_to_supabase(force: bool = False, replace: bool = False):
         "schools": ["id", "nome", "city", "coaches"],
         "materials": ["category", "subcategory", "item"],
         "requests": ["id", "school_id", "category", "material", "quantity", "date", "ps_number", "status"],
+        "stock_kimonos": ["id", "school_id", "project", "type", "size", "quantity"],
     }
     conflict_targets = {
         "users": "ps_number",
         "schools": "id",
         "requests": "id",
+        "stock_kimonos": "id",
         # materials has no unique constraint; avoid on_conflict
     }
     # No special table mapping needed now (coaches.json removed)
@@ -479,6 +482,7 @@ def pull_supabase_to_local():
         "schools": FILES["schools"],
         "materials": FILES["materials"],
         "requests": FILES["requests"],
+        "stock_kimonos": FILES["stock"],
     }
 
     allowed_fields = {
@@ -486,6 +490,7 @@ def pull_supabase_to_local():
         "schools": ["id", "nome", "city", "coaches"],
         "materials": ["category", "subcategory", "item"],
         "requests": ["id", "school_id", "category", "material", "quantity", "date", "ps_number", "status"],
+        "stock_kimonos": ["id", "school_id", "project", "type", "size", "quantity"],
     }
 
     pulled = 0
