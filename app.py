@@ -1330,15 +1330,25 @@ elif menu_selected == "Kimono Stock":
 
     if st.session_state.get("pending_stock"):
         st.subheader("Current Stock Batch")
-        # Allow editing the pending batch before submit (ID shown read-only)
+        # Allow editing the pending batch before submit (ID hidden)
         batch_df = pd.DataFrame(st.session_state["pending_stock"]) if st.session_state["pending_stock"] else pd.DataFrame()
-        # Ensure expected columns exist for the editor
+        # Ensure expected columns exist internally
         for c in ["id", "school_id", "project", "type", "size", "quantity"]:
             if c not in batch_df.columns:
                 batch_df[c] = ""
-        batch_df["Delete"] = False
+        # Keep a separate id mapping in session_state so we can hide `id` from the editor
+        ids = [str(r.get("id") or "") for r in st.session_state["pending_stock"]]
+        # Fill missing ids with generated uuids and persist mapping
+        for i in range(len(ids)):
+            if not ids[i]:
+                ids[i] = str(uuid.uuid4())
+                st.session_state["pending_stock"][i]["id"] = ids[i]
+        st.session_state["pending_stock_ids"] = ids
+
+        # Build display dataframe without the internal `id` column
+        display_df = batch_df.drop(columns=["id"]) if "id" in batch_df.columns else batch_df.copy()
+        display_df["Delete"] = False
         batch_col_cfg = {
-            "id": st.column_config.TextColumn("ID"),
             "school_id": st.column_config.TextColumn("School ID"),
             "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
             "type": st.column_config.TextColumn("Type"),
@@ -1346,7 +1356,7 @@ elif menu_selected == "Kimono Stock":
             "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
             "Delete": st.column_config.CheckboxColumn("Delete"),
         }
-        edited_batch = st.data_editor(batch_df, use_container_width=True, hide_index=True, column_config=batch_col_cfg)
+        edited_batch = st.data_editor(display_df, use_container_width=True, hide_index=True, column_config=batch_col_cfg)
 
         col_a, col_b = st.columns([1,1])
         with col_a:
@@ -1354,17 +1364,27 @@ elif menu_selected == "Kimono Stock":
                 # Apply edits back to session_state pending_stock
                 recs = edited_batch.fillna("").to_dict(orient="records")
                 new_pending = []
-                for r in recs:
+                ids_map = st.session_state.get("pending_stock_ids", [])
+                for idx, r in enumerate(recs):
                     if r.get("Delete"):
                         continue
                     try:
                         r["quantity"] = int(r.get("quantity") or 0)
                     except Exception:
                         r["quantity"] = 0
-                    # Ensure id remains or create one
-                    if not r.get("id"):
-                        r["id"] = str(uuid.uuid4())
-                    new_pending.append({k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]})
+                    # Reattach id from ids_map by index or create one
+                    if idx < len(ids_map) and ids_map[idx]:
+                        rid = ids_map[idx]
+                    else:
+                        rid = str(uuid.uuid4())
+                    new_pending.append({
+                        "id": rid,
+                        "school_id": r.get("school_id"),
+                        "project": r.get("project"),
+                        "type": r.get("type"),
+                        "size": r.get("size"),
+                        "quantity": int(r.get("quantity") or 0),
+                    })
                 st.session_state["pending_stock"] = new_pending
                 notify("success", "Pending batch updated.")
 
