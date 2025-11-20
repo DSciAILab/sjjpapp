@@ -1283,6 +1283,119 @@ elif menu_selected == "Kimono Stock":
     stock_rows = load_json(FILES["stock"]) or []
     stock_rows = ensure_stock_id_and_defaults(stock_rows)
 
+    materials = load_json(FILES["materials"]) or []
+
+    # --- Batch add flow (same dynamic as Submit Request) ---
+    if "pending_stock" not in st.session_state:
+        st.session_state["pending_stock"] = []
+
+    st.subheader("Add to Stock (Batch)")
+    visible_schools = list_user_schools(user, schools)
+    school_label_map = [f"{s.get('nome','(no name)')} ({s.get('id','')})" for s in visible_schools]
+    school_choice_add = st.selectbox("School (add)", school_label_map) if visible_schools else None
+    selected_school_add = None
+    if school_choice_add:
+        selected_school_add = school_choice_add.split("(")[-1].replace(")", "").strip()
+
+    project = st.selectbox("Project", ["MOE", "ESE", "UAE"])  # requested dropdown
+
+    categories = sorted(set(m.get("category", "") for m in materials)) if materials else []
+    category_sel = st.selectbox("Category", categories) if categories else None
+    filtered_mat = materials_by_category(materials, category_sel) if category_sel else []
+    sub_item_options = [f"{m.get('subcategory','')}|{m.get('item','')}" for m in filtered_mat]
+    material_choice = st.selectbox("Subcategory + Item", sub_item_options) if sub_item_options else None
+
+    size_input = None
+    type_label = None
+    if material_choice:
+        try:
+            type_label, size_input = material_choice.split("|", 1)
+        except Exception:
+            type_label = material_choice
+            size_input = ""
+
+    qty = st.number_input("Quantity", min_value=0, value=1, step=1, key="stock_qty")
+
+    if st.button("Add Another Item to Stock", disabled=not (selected_school_add and material_choice)):
+        item = {
+            "id": str(uuid.uuid4()),
+            "school_id": selected_school_add,
+            "project": project,
+            "type": type_label or "",
+            "size": size_input or "",
+            "quantity": int(qty),
+        }
+        st.session_state["pending_stock"].append(item)
+        notify("success", "Item added to pending stock batch.")
+
+    if st.session_state.get("pending_stock"):
+        st.subheader("Current Stock Batch")
+        batch_df = pd.DataFrame(st.session_state["pending_stock"]).drop(columns=["id"], errors="ignore")
+        st.dataframe(batch_df, use_container_width=True)
+
+        if st.button("Submit Stock Batch", type="primary"):
+            # Validate
+            errors = []
+            valid_school_ids = {str(s.get("id")) for s in schools}
+            for it in st.session_state["pending_stock"]:
+                sid = str(it.get("school_id", "")).strip()
+                if sid not in valid_school_ids:
+                    errors.append(f"Invalid school_id: {sid}")
+                try:
+                    if int(it.get("quantity", 0)) < 0:
+                        errors.append(f"Invalid quantity for school {sid}: {it.get('quantity')}")
+                except Exception:
+                    errors.append(f"Non-numeric quantity for school {sid}: {it.get('quantity')}")
+
+            if errors:
+                notify("error", "Cannot submit: invalid items detected.")
+                notify("warning", "; ".join(errors))
+                st.stop()
+
+            # Persist locally
+            existing = load_json(FILES["stock"]) or []
+            for it in st.session_state["pending_stock"]:
+                # if same school/project/type/size exists, increment quantity instead of duplicate
+                merged = False
+                for ex in existing:
+                    if (str(ex.get("school_id")) == str(it.get("school_id")) and
+                        str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
+                        str(ex.get("type", "")) == str(it.get("type", "")) and
+                        str(ex.get("size", "")) == str(it.get("size", ""))):
+                        try:
+                            ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
+                        except Exception:
+                            ex["quantity"] = int(it.get("quantity", 0))
+                        merged = True
+                        break
+                if not merged:
+                    existing.append(it)
+
+            save_json(FILES["stock"], existing)
+
+            # Sync to Supabase (best-effort)
+            synced = 0
+            if supabase:
+                try:
+                    payload = []
+                    for r in st.session_state["pending_stock"]:
+                        shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
+                        try:
+                            shaped["quantity"] = int(shaped.get("quantity", 0))
+                        except Exception:
+                            pass
+                        payload.append(shaped)
+                    if payload:
+                        supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
+                        synced = len(payload)
+                except Exception as e:
+                    notify("warning", f"Could not sync stock to Supabase: {e}")
+
+            notify("success", f"Stock batch saved ({len(st.session_state['pending_stock'])}) and synced: {synced}.")
+            st.session_state["pending_stock"] = []
+            st.rerun()
+
+
     visible_schools = list_user_schools(user, schools)
     school_label_map = [f"{s.get('nome','(no name)')} ({s.get('id','')})" for s in visible_schools]
     school_choice = st.selectbox("School", ["All schools"] + school_label_map) if visible_schools else None
@@ -1331,7 +1444,7 @@ elif menu_selected == "Kimono Stock":
     # Friendly column labels
     col_cfg = {
         "school_id": st.column_config.TextColumn("School ID"),
-        "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "OTHER"], default="MOE"),
+        "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
         "type": st.column_config.TextColumn("Type"),
         "size": st.column_config.TextColumn("Size"),
         "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
