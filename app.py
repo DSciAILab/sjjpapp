@@ -1440,14 +1440,21 @@ elif menu_selected == "Kimono Stock":
     st.divider()
     st.subheader("Edit stock rows")
     # Show editable grid for filtered rows (Admin can edit any; coaches only their schools)
-    df = pd.DataFrame(filtered_rows) if filtered_rows else pd.DataFrame(columns=["school_id", "project", "type", "size", "quantity"])
-    # Friendly column labels
+    df = pd.DataFrame(filtered_rows) if filtered_rows else pd.DataFrame(columns=["id", "school_id", "project", "type", "size", "quantity"])
+    # Ensure id column exists (hidden from users) and provide delete checkbox
+    if "id" not in df.columns:
+        df["id"] = ""
+    df["Delete"] = False
+
+    # Friendly column labels (hide internal id)
     col_cfg = {
+        "id": st.column_config.TextColumn("ID", hidden=True),
         "school_id": st.column_config.TextColumn("School ID"),
         "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "UAE", "OTHER"], default="MOE"),
         "type": st.column_config.TextColumn("Type"),
         "size": st.column_config.TextColumn("Size"),
         "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
+        "Delete": st.column_config.CheckboxColumn("Delete"),
     }
     edited = st.data_editor(df, use_container_width=True, hide_index=True, column_config=col_cfg)
 
@@ -1467,17 +1474,63 @@ elif menu_selected == "Kimono Stock":
             notify("error", "; ".join(invalid))
             st.stop()
 
-        # Merge back into full list: replace rows that match by id, otherwise append
+        # Merge back into full list: support delete flag, update by id or by matching keys
         existing = load_json(FILES["stock"]) or []
+        # Normalize existing quantities and keys
+        for ex in existing:
+            try:
+                ex["quantity"] = int(ex.get("quantity", 0))
+            except Exception:
+                ex["quantity"] = 0
+            ex["project"] = str(ex.get("project", "")).upper()
+
+        # Helper to find existing row by composite key
+        def find_match(rows, r):
+            for row in rows:
+                if (str(row.get("school_id")) == str(r.get("school_id")) and
+                        str(row.get("project", "")).upper() == str(r.get("project", "")).upper() and
+                        str(row.get("type", "")) == str(r.get("type", "")) and
+                        str(row.get("size", "")) == str(r.get("size", ""))):
+                    return row
+            return None
+
+        # Build by_id map
         by_id = {r.get("id"): r for r in existing if r.get("id")}
+
+        # Apply edits
         for r in recs:
-            if r.get("id") and r.get("id") in by_id:
-                by_id[r.get("id")].update(r)
+            # Deletion request
+            if r.get("Delete"):
+                rid = r.get("id")
+                if rid and rid in by_id:
+                    by_id.pop(rid, None)
+                else:
+                    # try to find by composite key and remove
+                    match = find_match(list(by_id.values()), r)
+                    if match and match.get("id") in by_id:
+                        by_id.pop(match.get("id"), None)
+                continue
+
+            rid = r.get("id")
+            if rid and rid in by_id:
+                # update existing by id
+                # keep id unchanged
+                to_update = {k: v for k, v in r.items() if k != "Delete"}
+                by_id[rid].update(to_update)
             else:
-                # ensure id
-                if not r.get("id"):
-                    r["id"] = str(uuid.uuid4())
-                by_id[r["id"]] = r
+                # try find by composite key
+                match = find_match(list(by_id.values()), r)
+                if match:
+                    # update matched row
+                    match.update({k: v for k, v in r.items() if k != "Delete"})
+                else:
+                    # new row -> ensure id
+                    if not rid:
+                        r["id"] = str(uuid.uuid4())
+                    # drop Delete flag
+                    if "Delete" in r:
+                        r.pop("Delete")
+                    by_id[r["id"]] = r
 
         out = list(by_id.values())
         save_json(FILES["stock"], out)
