@@ -47,6 +47,7 @@ FILES = {
     "schools": os.path.join(DATA_DIR, "schools.json"),
     "materials": os.path.join(DATA_DIR, "materials.json"),
     "requests": os.path.join(DATA_DIR, "requests.json"),
+    "stock": os.path.join(DATA_DIR, "stock_kimonos.json"),
 }
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -121,6 +122,7 @@ ensure_json(FILES["users"], [
 ensure_json(FILES["schools"], [])
 ensure_json(FILES["materials"], [])
 ensure_json(FILES["requests"], [])
+ensure_json(FILES["stock"], [])
 
 
 # Migration: merge data/coaches.json into users.json (one-off)
@@ -214,6 +216,35 @@ def ensure_request_id_and_defaults(rows):
             changed = True
     if changed:
         save_json(FILES["requests"], rows)
+    return rows
+
+
+def ensure_stock_id_and_defaults(rows):
+    """Ensure each stock row has an `id` and a numeric `quantity`.
+
+    Expected stock row schema:
+      {"id": "<uuid>", "school_id": "1565", "project": "MOE|ESE", "type": "KIMONO TYPE", "size": "C0|C1|...", "quantity": 10}
+    """
+    changed = False
+    for r in rows:
+        if "id" not in r:
+            r["id"] = str(uuid.uuid4())
+            changed = True
+        # quantity must be int
+        if "quantity" not in r:
+            r["quantity"] = 0
+            changed = True
+        else:
+            try:
+                r["quantity"] = int(r["quantity"])
+            except Exception:
+                r["quantity"] = 0
+                changed = True
+        # normalize project label
+        if "project" in r and isinstance(r["project"], str):
+            r["project"] = r["project"].strip().upper()
+    if changed:
+        save_json(FILES["stock"], rows)
     return rows
 
 
@@ -489,6 +520,7 @@ try:
     options = ["Submit Request", "Manage Requests", "Admin Schools"]
     if user["credential"] == "Admin":
         options += ["Admin Users", "Data Sync"]
+    options.append("Kimono Stock")
     menu_selected = st.segmented_control(
         "Select a section:", options
     )
@@ -496,6 +528,7 @@ except Exception:
     options = ["Submit Request", "Manage Requests", "Admin Schools"]
     if user["credential"] == "Admin":
         options += ["Admin Users", "Data Sync"]
+    options.append("Kimono Stock")
     menu_selected = st.radio("Select a section:", options, horizontal=True)
 
 st.divider()
@@ -702,11 +735,16 @@ elif menu_selected == "Manage Requests":
             if "school_id" in dfp.columns:
                 dfp = dfp.drop(columns=["school_id"], errors="ignore")
             # Allow everyone to mark Delete on their pending rows
+            if is_admin:
+                dfp["Select"] = False
             dfp["Delete"] = False
             preferred = ["School", "category", "material", "quantity", "status", "date"]
             if is_admin:
                 preferred = ["School", "Requester", "PS Number", "category", "material", "quantity", "status", "date"]
-            first_cols = ["Delete"]
+            first_cols = []
+            if is_admin:
+                first_cols.append("Select")
+            first_cols.append("Delete")
             ordered = [c for c in first_cols + preferred if c in dfp.columns] + [c for c in dfp.columns if c not in set(first_cols + preferred)]
             dfp = dfp[ordered]
 
@@ -726,6 +764,7 @@ elif menu_selected == "Manage Requests":
                 "Delete": st.column_config.CheckboxColumn("Delete"),
             }
             if is_admin:
+                col_config["Select"] = st.column_config.CheckboxColumn("Select")
                 col_config["Requester"] = st.column_config.TextColumn("Requested By")
                 col_config["PS Number"] = st.column_config.TextColumn("PS Number")
             if not is_admin:
@@ -734,6 +773,77 @@ elif menu_selected == "Manage Requests":
                 st.caption("Note: School and Date are read-only; edits are ignored on save.")
 
             edited_df = st.data_editor(dfp, use_container_width=True, hide_index=True, num_rows="fixed", column_config=col_config)
+
+            if is_admin and not edited_df.empty:
+                status_options = ["Pending", "Approved", "Rejected"]
+                default_index = 1 if len(status_options) > 1 else 0
+                new_status = st.selectbox(
+                    "New status for selected requests",
+                    status_options,
+                    index=default_index,
+                    key="batch_status_select"
+                )
+                selected_indices = []
+                if "Select" in edited_df.columns:
+                    try:
+                        selected_series = edited_df["Select"].astype(bool)
+                        selected_indices = selected_series[selected_series].index.tolist()
+                    except Exception:
+                        selected_indices = []
+                apply_disabled = len(selected_indices) == 0
+                if st.button(
+                    "Update Status for Selected Requests",
+                    type="primary",
+                    disabled=apply_disabled,
+                    key="batch_status_update_btn"
+                ):
+                    if not selected_indices:
+                        notify("info", "Select at least one request to update.")
+                    else:
+                        by_id = {r.get("id"): r for r in rows if r.get("id")}
+                        updated_ids = []
+                        for idx in selected_indices:
+                            if 0 <= idx < len(pending):
+                                rid = pending[idx].get("id")
+                                if rid and rid in by_id:
+                                    by_id[rid]["status"] = new_status
+                                    updated_ids.append(rid)
+                        if not updated_ids:
+                            notify("info", "No valid requests selected for batch update.")
+                        else:
+                            updated_rows = []
+                            for r in rows:
+                                rid = r.get("id")
+                                if rid in by_id:
+                                    updated_rows.append(by_id[rid])
+                                else:
+                                    updated_rows.append(r)
+                            save_json(FILES["requests"], updated_rows)
+                            synced_count = 0
+                            if supabase:
+                                try:
+                                    allowed = {"id", "school_id", "category", "material", "quantity", "date", "ps_number", "status"}
+                                    payload = []
+                                    for rid in updated_ids:
+                                        record = by_id.get(rid)
+                                        if not record:
+                                            continue
+                                        shaped = {k: record.get(k) for k in allowed}
+                                        if "quantity" in shaped and shaped["quantity"] is not None:
+                                            try:
+                                                shaped["quantity"] = int(shaped["quantity"])
+                                            except Exception:
+                                                pass
+                                        payload.append(shaped)
+                                    if payload:
+                                        supabase.table("requests").upsert(payload, on_conflict="id").execute()
+                                        synced_count = len(payload)
+                                except Exception as e:
+                                    notify("warning", f"Updated locally, but could not sync to Supabase: {e}")
+                            notify("success", f"Updated status to '{new_status}' for {len(updated_ids)} request(s).")
+                            show_summary("Manage Requests — Batch Status", updated=len(updated_ids), synced=synced_count)
+                            st.session_state.pop("confirm_delete_requests", None)
+                            st.rerun()
         else:
             edited_df = pd.DataFrame()
             st.info("No pending requests.")
@@ -1157,6 +1267,104 @@ elif menu_selected == "Admin Users":
                 notify("success", f"Saved {len(shaped)} user(s) locally.")
                 show_summary("Admin Users — Save", saved=len(shaped))
             st.rerun()
+
+# ----------------------------
+# Kimono Stock
+# ----------------------------
+elif menu_selected == "Kimono Stock":
+    st.header("Kimono Stock — Estoque de Kimonos")
+
+    schools = load_json(FILES["schools"]) or []
+    stock_rows = load_json(FILES["stock"]) or []
+    stock_rows = ensure_stock_id_and_defaults(stock_rows)
+
+    visible_schools = list_user_schools(user, schools)
+    school_label_map = [f"{s.get('nome','(no name)')} ({s.get('id','')})" for s in visible_schools]
+    school_choice = st.selectbox("School", ["All schools"] + school_label_map) if visible_schools else None
+    selected_school_id = None
+    if school_choice and school_choice != "All schools":
+        selected_school_id = school_choice.split("(")[-1].replace(")", "").strip()
+
+    # Filter stock rows by visibility
+    if user.get("credential") == "Admin":
+        filtered_rows = stock_rows if not selected_school_id else [r for r in stock_rows if str(r.get("school_id")) == str(selected_school_id)]
+    else:
+        allowed_ids = {str(s.get("id")) for s in visible_schools}
+        filtered_rows = [r for r in stock_rows if str(r.get("school_id")) in allowed_ids]
+        if selected_school_id:
+            filtered_rows = [r for r in filtered_rows if str(r.get("school_id")) == str(selected_school_id)]
+
+    # Aggregate counts by project -> type -> size
+    agg = {}
+    for r in filtered_rows:
+        proj = (r.get("project") or "").upper() or "UNKNOWN"
+        typ = r.get("type") or r.get("item") or "UNKNOWN"
+        size = r.get("size") or "UNKNOWN"
+        qty = int(r.get("quantity") or 0)
+        agg.setdefault(proj, {}).setdefault(typ, {}).setdefault(size, 0)
+        agg[proj][typ][size] += qty
+
+    st.subheader("Aggregated stock summary")
+    if not agg:
+        st.info("No stock rows found for the selected schools.")
+    else:
+        for proj, types in sorted(agg.items()):
+            st.markdown(f"**Project: {proj}**")
+            rows = []
+            for typ, sizes in sorted(types.items()):
+                for size, qty in sorted(sizes.items()):
+                    rows.append({"Type": typ, "Size": size, "Quantity": qty})
+            try:
+                st.table(pd.DataFrame(rows))
+            except Exception:
+                st.write(rows)
+
+    st.divider()
+    st.subheader("Edit stock rows")
+    # Show editable grid for filtered rows (Admin can edit any; coaches only their schools)
+    df = pd.DataFrame(filtered_rows) if filtered_rows else pd.DataFrame(columns=["school_id", "project", "type", "size", "quantity"])
+    # Friendly column labels
+    col_cfg = {
+        "school_id": st.column_config.TextColumn("School ID"),
+        "project": st.column_config.SelectboxColumn("Project", options=["MOE", "ESE", "OTHER"], default="MOE"),
+        "type": st.column_config.TextColumn("Type"),
+        "size": st.column_config.TextColumn("Size"),
+        "quantity": st.column_config.NumberColumn("Quantity", min_value=0, step=1),
+    }
+    edited = st.data_editor(df, use_container_width=True, hide_index=True, column_config=col_cfg)
+
+    if st.button("Save Stock Changes", type="primary"):
+        # Normalize and validate
+        recs = edited.fillna("").to_dict(orient="records")
+        invalid = []
+        for i, r in enumerate(recs):
+            if not str(r.get("school_id", "")).strip():
+                invalid.append(f"row {i+1}: missing school_id")
+            try:
+                r["quantity"] = int(r.get("quantity") or 0)
+            except Exception:
+                invalid.append(f"row {i+1}: invalid quantity")
+            r["project"] = str(r.get("project") or "").upper()
+        if invalid:
+            notify("error", "; ".join(invalid))
+            st.stop()
+
+        # Merge back into full list: replace rows that match by id, otherwise append
+        existing = load_json(FILES["stock"]) or []
+        by_id = {r.get("id"): r for r in existing if r.get("id")}
+        for r in recs:
+            if r.get("id") and r.get("id") in by_id:
+                by_id[r.get("id")].update(r)
+            else:
+                # ensure id
+                if not r.get("id"):
+                    r["id"] = str(uuid.uuid4())
+                by_id[r["id"]] = r
+
+        out = list(by_id.values())
+        save_json(FILES["stock"], out)
+        notify("success", f"Saved {len(recs)} stock rows.")
+        st.rerun()
 
 # ----------------------------
 # Data Sync (Admin Only)
