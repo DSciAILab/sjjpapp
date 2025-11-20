@@ -1358,98 +1358,93 @@ elif menu_selected == "Kimono Stock":
         }
         edited_batch = st.data_editor(display_df, use_container_width=True, hide_index=True, column_config=batch_col_cfg)
 
-        col_a, col_b = st.columns([1,1])
-        with col_a:
-            if st.button("Update Batch"):
-                # Apply edits back to session_state pending_stock
-                recs = edited_batch.fillna("").to_dict(orient="records")
-                new_pending = []
-                ids_map = st.session_state.get("pending_stock_ids", [])
-                for idx, r in enumerate(recs):
-                    if r.get("Delete"):
-                        continue
-                    try:
-                        r["quantity"] = int(r.get("quantity") or 0)
-                    except Exception:
-                        r["quantity"] = 0
-                    # Reattach id from ids_map by index or create one
-                    if idx < len(ids_map) and ids_map[idx]:
-                        rid = ids_map[idx]
-                    else:
-                        rid = str(uuid.uuid4())
-                    new_pending.append({
-                        "id": rid,
-                        "school_id": r.get("school_id"),
-                        "project": r.get("project"),
-                        "type": r.get("type"),
-                        "size": r.get("size"),
-                        "quantity": int(r.get("quantity") or 0),
-                    })
-                st.session_state["pending_stock"] = new_pending
-                notify("success", "Pending batch updated.")
+        # Single action: Submit uses the edited batch directly (applies edits then submits)
+        if st.button("Submit Stock Batch", type="primary"):
+            # Reconstruct pending list from edited_batch and id mapping
+            recs = edited_batch.fillna("").to_dict(orient="records")
+            ids_map = st.session_state.get("pending_stock_ids", [])
+            pending = []
+            for idx, r in enumerate(recs):
+                if r.get("Delete"):
+                    continue
+                try:
+                    qty = int(r.get("quantity") or 0)
+                except Exception:
+                    qty = 0
+                if idx < len(ids_map) and ids_map[idx]:
+                    rid = ids_map[idx]
+                else:
+                    rid = str(uuid.uuid4())
+                pending.append({
+                    "id": rid,
+                    "school_id": r.get("school_id"),
+                    "project": r.get("project"),
+                    "type": r.get("type"),
+                    "size": r.get("size"),
+                    "quantity": qty,
+                })
 
-        with col_b:
-            if st.button("Submit Stock Batch", type="primary"):
-                # Validate
-                errors = []
-                valid_school_ids = {str(s.get("id")) for s in schools}
-                for it in st.session_state["pending_stock"]:
-                    sid = str(it.get("school_id", "")).strip()
-                    if sid not in valid_school_ids:
-                        errors.append(f"Invalid school_id: {sid}")
-                    try:
-                        if int(it.get("quantity", 0)) < 0:
-                            errors.append(f"Invalid quantity for school {sid}: {it.get('quantity')}")
-                    except Exception:
-                        errors.append(f"Non-numeric quantity for school {sid}: {it.get('quantity')}")
+            # Validate
+            errors = []
+            valid_school_ids = {str(s.get("id")) for s in schools}
+            for it in pending:
+                sid = str(it.get("school_id", "")).strip()
+                if sid not in valid_school_ids:
+                    errors.append(f"Invalid school_id: {sid}")
+                try:
+                    if int(it.get("quantity", 0)) < 0:
+                        errors.append(f"Invalid quantity for school {sid}: {it.get('quantity')}")
+                except Exception:
+                    errors.append(f"Non-numeric quantity for school {sid}: {it.get('quantity')}")
 
-                if errors:
-                    notify("error", "Cannot submit: invalid items detected.")
-                    notify("warning", "; ".join(errors))
-                    st.stop()
+            if errors:
+                notify("error", "Cannot submit: invalid items detected.")
+                notify("warning", "; ".join(errors))
+                st.stop()
 
-                # Persist locally
-                existing = load_json(FILES["stock"]) or []
-                for it in st.session_state["pending_stock"]:
-                    # if same school/project/type/size exists, increment quantity instead of duplicate
-                    merged = False
-                    for ex in existing:
-                        if (str(ex.get("school_id")) == str(it.get("school_id")) and
-                            str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
-                            str(ex.get("type", "")) == str(it.get("type", "")) and
-                            str(ex.get("size", "")) == str(it.get("size", ""))):
-                            try:
-                                ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
-                            except Exception:
-                                ex["quantity"] = int(it.get("quantity", 0))
-                            merged = True
-                            break
-                    if not merged:
-                        existing.append(it)
+            # Persist locally
+            existing = load_json(FILES["stock"]) or []
+            for it in pending:
+                # if same school/project/type/size exists, increment quantity instead of duplicate
+                merged = False
+                for ex in existing:
+                    if (str(ex.get("school_id")) == str(it.get("school_id")) and
+                        str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
+                        str(ex.get("type", "")) == str(it.get("type", "")) and
+                        str(ex.get("size", "")) == str(it.get("size", ""))):
+                        try:
+                            ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
+                        except Exception:
+                            ex["quantity"] = int(it.get("quantity", 0))
+                        merged = True
+                        break
+                if not merged:
+                    existing.append(it)
 
-                save_json(FILES["stock"], existing)
+            save_json(FILES["stock"], existing)
 
-                # Sync to Supabase (best-effort)
-                synced = 0
-                if supabase:
-                    try:
-                        payload = []
-                        for r in st.session_state["pending_stock"]:
-                            shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
-                            try:
-                                shaped["quantity"] = int(shaped.get("quantity", 0))
-                            except Exception:
-                                pass
-                            payload.append(shaped)
-                        if payload:
-                            supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
-                            synced = len(payload)
-                    except Exception as e:
-                        notify("warning", f"Could not sync stock to Supabase: {e}")
+            # Sync to Supabase (best-effort)
+            synced = 0
+            if supabase:
+                try:
+                    payload = []
+                    for r in pending:
+                        shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
+                        try:
+                            shaped["quantity"] = int(shaped.get("quantity", 0))
+                        except Exception:
+                            pass
+                        payload.append(shaped)
+                    if payload:
+                        supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
+                        synced = len(payload)
+                except Exception as e:
+                    notify("warning", f"Could not sync stock to Supabase: {e}")
 
-                notify("success", f"Stock batch saved ({len(st.session_state['pending_stock'])}) and synced: {synced}.")
-                st.session_state["pending_stock"] = []
-                st.rerun()
+            notify("success", f"Stock batch saved ({len(pending)}) and synced: {synced}.")
+            st.session_state["pending_stock"] = []
+            st.session_state.pop("pending_stock_ids", None)
+            st.rerun()
 
 
     visible_schools = list_user_schools(user, schools)
