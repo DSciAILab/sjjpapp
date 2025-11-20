@@ -319,16 +319,22 @@ def persist_requests(records):
         })
         saved += 1
 
-    save_json(FILES["requests"], list(by_id.values()))
-
+    # If Supabase is configured, attempt to upsert there first and only mirror locally on success
     synced = 0
     error = None
     if supabase and payload:
         try:
             supabase.table("requests").upsert(payload, on_conflict="id").execute()
             synced = len(payload)
+            # mirror local copy only after successful remote upsert
+            save_json(FILES["requests"], list(by_id.values()))
         except Exception as exc:
             error = exc
+            # Do not save locally if sync is required but failed
+            return {"saved": 0, "synced": 0, "error": error}
+    else:
+        # No Supabase configured; fallback to local-only behavior
+        save_json(FILES["requests"], list(by_id.values()))
 
     return {"saved": saved, "synced": synced, "error": error}
 
@@ -1402,49 +1408,53 @@ elif menu_selected == "Kimono Stock":
                 notify("warning", "; ".join(errors))
                 st.stop()
 
-            # Persist locally
-            existing = load_json(FILES["stock"]) or []
-            for it in pending:
-                # if same school/project/type/size exists, increment quantity instead of duplicate
-                merged = False
-                for ex in existing:
-                    if (str(ex.get("school_id")) == str(it.get("school_id")) and
-                        str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
-                        str(ex.get("type", "")) == str(it.get("type", "")) and
-                        str(ex.get("size", "")) == str(it.get("size", ""))):
-                        try:
-                            ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
-                        except Exception:
-                            ex["quantity"] = int(it.get("quantity", 0))
-                        merged = True
-                        break
-                if not merged:
-                    existing.append(it)
+                # When Supabase is required, attempt upsert first and only mirror locally on success
+                if not supabase:
+                    notify("error", "Supabase is not configured. Cannot submit stock batch when operating in online-only mode.")
+                    st.stop()
 
-            save_json(FILES["stock"], existing)
+                payload = []
+                for r in pending:
+                    shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
+                    try:
+                        shaped["quantity"] = int(shaped.get("quantity", 0))
+                    except Exception:
+                        pass
+                    payload.append(shaped)
 
-            # Sync to Supabase (best-effort)
-            synced = 0
-            if supabase:
+                synced = 0
                 try:
-                    payload = []
-                    for r in pending:
-                        shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
-                        try:
-                            shaped["quantity"] = int(shaped.get("quantity", 0))
-                        except Exception:
-                            pass
-                        payload.append(shaped)
                     if payload:
                         supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
                         synced = len(payload)
                 except Exception as e:
-                    notify("warning", f"Could not sync stock to Supabase: {e}")
+                    notify("error", f"Could not sync stock to Supabase: {e}")
+                    st.stop()
 
-            notify("success", f"Stock batch saved ({len(pending)}) and synced: {synced}.")
-            st.session_state["pending_stock"] = []
-            st.session_state.pop("pending_stock_ids", None)
-            st.rerun()
+                # Mirror to local storage only after successful remote upsert
+                existing = load_json(FILES["stock"]) or []
+                for it in pending:
+                    merged = False
+                    for ex in existing:
+                        if (str(ex.get("school_id")) == str(it.get("school_id")) and
+                            str(ex.get("project", "")).upper() == str(it.get("project", "")).upper() and
+                            str(ex.get("type", "")) == str(it.get("type", "")) and
+                            str(ex.get("size", "")) == str(it.get("size", ""))):
+                            try:
+                                ex["quantity"] = int(ex.get("quantity", 0)) + int(it.get("quantity", 0))
+                            except Exception:
+                                ex["quantity"] = int(it.get("quantity", 0))
+                            merged = True
+                            break
+                    if not merged:
+                        existing.append(it)
+
+                save_json(FILES["stock"], existing)
+
+                notify("success", f"Stock batch synced to Supabase ({synced}) and local mirror updated.")
+                st.session_state["pending_stock"] = []
+                st.session_state.pop("pending_stock_ids", None)
+                st.rerun()
 
 
     visible_schools = list_user_schools(user, schools)
@@ -1596,8 +1606,32 @@ elif menu_selected == "Kimono Stock":
                     out_by_id[rid] = shaped
 
                 out = list(out_by_id.values())
+                # Require Supabase: upsert first, then mirror locally on success
+                if not supabase:
+                    notify("error", "Supabase is not configured. Cannot save persisted stock when operating in online-only mode.")
+                    st.stop()
+
+                payload = []
+                for r in out:
+                    shaped = {k: r.get(k) for k in ["id", "school_id", "project", "type", "size", "quantity"]}
+                    try:
+                        shaped["quantity"] = int(shaped.get("quantity", 0))
+                    except Exception:
+                        pass
+                    payload.append(shaped)
+
+                synced = 0
+                try:
+                    if payload:
+                        supabase.table("stock_kimonos").upsert(payload, on_conflict="id").execute()
+                        synced = len(payload)
+                except Exception as e:
+                    notify("error", f"Could not sync persisted stock to Supabase: {e}")
+                    st.stop()
+
+                # Mirror locally after successful upsert
                 save_json(FILES["stock"], out)
-                notify("success", f"Saved {len(recs)} persisted stock rows.")
+                notify("success", f"Saved {len(recs)} persisted stock rows. Synced: {synced}.")
                 # refresh view
                 st.session_state["editing_persisted_stock"] = False
                 st.rerun()
